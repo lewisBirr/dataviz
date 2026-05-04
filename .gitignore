@@ -4,6 +4,11 @@
 # Quarto in docs
 docs/.quarto/
 
+# EDA cache — large data files (parquet, JSON) ignored; plots committed for Quarto freeze
+eda/cache/
+!eda/cache/plots/
+!eda/cache/plots/**
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
