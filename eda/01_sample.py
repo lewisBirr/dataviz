@@ -1,16 +1,15 @@
 """
-01_sample.py — Stream Epstein Files from HuggingFace and build a stratified sample.
+01_sample.py — Build a stratified sample from the Epstein Files parquet shards.
 
-Filters to file_type == "pdf" and non-empty text_content, then keeps the first
-SAMPLE_SIZE qualifying documents per dataset_id (stratum).  Saves the result as
-eda/cache/sample.parquet using Polars.
+Downloads each shard via the authenticated HuggingFace hub client (hf_hub_download),
+reads it locally with polars, deletes it, and moves on. This avoids unauthenticated
+direct-URL requests that trigger 429s even when a token is set.
+
+Downloaded shards land in eda/cache/_shards/ and are deleted immediately after reading.
+The final sample is written to eda/cache/sample.parquet.
 
 Usage:
     uv run python eda/01_sample.py
-
-Environment:
-    HF_TOKEN (optional) — HuggingFace token for authenticated access / higher rate limits.
-    Set in .env; leave blank for anonymous streaming (works fine for this public dataset).
 """
 
 import os
@@ -20,9 +19,8 @@ from pathlib import Path
 
 import polars as pl
 from dotenv import load_dotenv
+from huggingface_hub import HfApi, hf_hub_download
 
-# Ensure repo root is on sys.path so `from eda.config import ...` works when
-# the script is run from the repo root (uv run python eda/01_sample.py).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from eda.config import (
@@ -35,147 +33,94 @@ from eda.config import (
 
 load_dotenv()
 
+# Only fetch these columns — skips audio/image/video binary blobs entirely.
+COLUMNS = ["dataset_id", "doc_id", "file_name", "file_type", "online_url", "text_content", "metadata"]
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
-def _load_dataset_with_backoff(dataset_name: str, token: str | None):
-    """Load a HuggingFace streaming dataset with exponential backoff.
-
-    Assumption: transient 429s and connection resets are the most common failures
-    when streaming large datasets; 5 retries with doubling delays is sufficient.
-    """
-    from datasets import load_dataset
-
-    for attempt in range(HF_MAX_RETRIES):
-        try:
-            ds = load_dataset(
-                dataset_name,
-                split="train",
-                streaming=True,
-                token=token,
-            )
-            return ds
-        except Exception as exc:
-            wait = 2**attempt
-            if attempt < HF_MAX_RETRIES - 1:
-                print(
-                    f"⚠️  HuggingFace load error (attempt {attempt + 1}/{HF_MAX_RETRIES}): "
-                    f"{exc}. Retrying in {wait}s…"
-                )
-                time.sleep(wait)
-            else:
-                print(f"❌ Failed to load dataset after {HF_MAX_RETRIES} attempts: {exc}")
-                sys.exit(1)
+SHARD_DIR = CACHE_DIR / "_shards"
 
 
-def _is_valid(row: dict) -> bool:
-    """Return True if the row qualifies for inclusion in the sample.
-
-    Criteria:
-    - file_type == "pdf"  (image-derived docs have much noisier OCR text)
-    - text_content is a non-empty, non-whitespace string
-    """
-    if row.get("file_type") != "pdf":
-        return False
-    text = row.get("text_content")
-    if not isinstance(text, str) or not text.strip():
-        return False
-    return True
-
-
-# ---------------------------------------------------------------------------
-# Main
-# ---------------------------------------------------------------------------
+def download_and_read(fname: str, token: str | None, attempt: int = 0) -> pl.DataFrame | None:
+    """Download a shard via authenticated HF hub, read with polars, then delete it."""
+    try:
+        local_path = hf_hub_download(
+            repo_id=DATASET_NAME,
+            filename=fname,
+            repo_type="dataset",
+            token=token,
+            local_dir=str(SHARD_DIR),
+            local_dir_use_symlinks=False,
+        )
+        df = pl.read_parquet(local_path, columns=COLUMNS)
+        Path(local_path).unlink(missing_ok=True)  # delete shard after reading
+        return df
+    except Exception as exc:
+        if attempt >= HF_MAX_RETRIES - 1:
+            print(f"   ❌ Failed after {HF_MAX_RETRIES} attempts: {exc}", flush=True)
+            return None
+        wait = 2 ** attempt
+        print(f"   ⚠️  Retrying in {wait}s … ({exc})", flush=True)
+        time.sleep(wait)
+        return download_and_read(fname, token, attempt + 1)
 
 
 def main() -> None:
     token = os.environ.get("HF_TOKEN") or None
-    if token:
-        print("🔑 Using HuggingFace token from environment.")
-    else:
-        print("🌐 No HF_TOKEN found — streaming anonymously (public dataset).")
+    print(f"{'🔑 Using HF token.' if token else '🌐 No HF_TOKEN — anonymous (expect rate limits).'}", flush=True)
 
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    SHARD_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"📥 Loading dataset: {DATASET_NAME} (streaming) …")
-    ds = _load_dataset_with_backoff(DATASET_NAME, token)
+    print(f"📋 Listing shards in {DATASET_NAME} …", flush=True)
+    api = HfApi(token=token)
+    all_files = list(api.list_repo_files(DATASET_NAME, repo_type="dataset"))
+    parquet_files = sorted(f for f in all_files if f.endswith(".parquet"))
+    print(f"   Found {len(parquet_files)} parquet shards.\n", flush=True)
 
-    # Stratified sampling state: {dataset_id: count_so_far}
     counts: dict[str, int] = {}
     records: list[dict] = []
-    scanned = 0
 
-    print(f"🔍 Scanning stream — target: {SAMPLE_SIZE} docs per dataset_id …")
+    for idx, fname in enumerate(parquet_files, 1):
+        summary = "  ".join(f"id={k}:{v}" for k, v in sorted(counts.items())) or "none yet"
+        print(f"[{idx:3d}/{len(parquet_files)}] {fname}  |  {summary}", flush=True)
 
-    try:
-        for row in ds:
-            scanned += 1
+        df = download_and_read(fname, token)
+        if df is None:
+            continue
 
-            if not _is_valid(row):
-                continue
+        df = df.filter(
+            (pl.col("file_type") == "pdf")
+            & pl.col("text_content").is_not_null()
+            & (pl.col("text_content").str.strip_chars().str.len_chars() > 0)
+        )
 
-            did = str(row.get("dataset_id", "unknown"))
+        if df.is_empty():
+            continue
+
+        df = df.with_columns(pl.col("dataset_id").cast(pl.String))
+
+        for row in df.iter_rows(named=True):
+            did = row["dataset_id"]
             if counts.get(did, 0) >= SAMPLE_SIZE:
-                continue  # this stratum is full
-
-            records.append(
-                {
-                    "dataset_id": did,
-                    "doc_id": str(row.get("doc_id", "")),
-                    "file_name": str(row.get("file_name", "")),
-                    "file_type": str(row.get("file_type", "")),
-                    "online_url": str(row.get("online_url", "")),
-                    "text_content": str(row.get("text_content", "")),
-                    "metadata": str(row.get("metadata", "")),
-                }
-            )
+                continue
+            records.append(row)
             counts[did] = counts.get(did, 0) + 1
 
-            if scanned % 10_000 == 0:
-                filled = sum(1 for v in counts.values() if v >= SAMPLE_SIZE)
-                print(
-                    f"   … scanned {scanned:,} rows | "
-                    f"{len(records):,} kept | "
-                    f"{filled}/{len(counts)} strata full"
-                )
+        # Stop early once all strata are full (after scanning enough files to surface rare ones).
+        if idx >= 20 and all(v >= SAMPLE_SIZE for v in counts.values()):
+            print(f"\n✅ All {len(counts)} strata full — stopping at shard {idx}.", flush=True)
+            break
 
-            # Stop once all discovered strata are full.
-            # Assumption: we don't know all dataset_ids upfront; we stop
-            # only when all strata we've seen have reached SAMPLE_SIZE and
-            # we've scanned at least 50,000 rows to surface rare strata.
-            if (
-                scanned >= 50_000
-                and all(v >= SAMPLE_SIZE for v in counts.values())
-            ):
-                print(f"✅ All {len(counts)} strata full — stopping early.")
-                break
-
-    except KeyboardInterrupt:
-        print("⚠️  Interrupted by user — saving partial sample.")
-
-    # Report strata that didn't reach SAMPLE_SIZE (no silent truncation).
     for did, cnt in sorted(counts.items()):
         if cnt < SAMPLE_SIZE:
-            print(
-                f"⚠️  Stratum '{did}' has only {cnt} qualifying docs "
-                f"(target was {SAMPLE_SIZE}) — using what's available."
-            )
+            print(f"⚠️  Stratum '{did}': only {cnt} qualifying docs (target {SAMPLE_SIZE}).", flush=True)
 
     if not records:
-        print("❌ No records collected. Check dataset name and connectivity.")
+        print("❌ No records collected.", flush=True)
         sys.exit(1)
 
-    print(f"\n📦 Writing {len(records):,} rows to {SAMPLE_PATH} …")
-    df = pl.DataFrame(records)
-    df.write_parquet(SAMPLE_PATH)
-
-    print(f"✅ Sample saved: {SAMPLE_PATH}")
-    print(f"   Strata: {sorted(counts.keys())}")
-    print(f"   Counts: {dict(sorted(counts.items()))}")
-    print(f"   Total scanned: {scanned:,}")
+    print(f"\n💾 Writing {len(records):,} rows → {SAMPLE_PATH}", flush=True)
+    pl.DataFrame(records).write_parquet(SAMPLE_PATH)
+    print(f"✅ Done. Strata: {dict(sorted(counts.items()))}", flush=True)
 
 
 if __name__ == "__main__":

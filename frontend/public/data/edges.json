@@ -1,0 +1,8 @@
+[
+  {"source":"jeffrey epstein","target":"ghislaine maxwell","weight":42},
+  {"source":"jeffrey epstein","target":"southern district of new york","weight":28},
+  {"source":"jeffrey epstein","target":"department of justice","weight":21},
+  {"source":"ghislaine maxwell","target":"southern district of new york","weight":19},
+  {"source":"southern district of new york","target":"alison nathan","weight":15},
+  {"source":"department of justice","target":"alison nathan","weight":11}
+]

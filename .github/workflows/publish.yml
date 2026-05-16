@@ -3,7 +3,7 @@ on:
   push:
     branches: main
 
-name: Quarto Publish
+name: Build & Publish
 
 permissions:
   contents: read
@@ -21,8 +21,26 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v4
 
+      # --- React app (frontend/) ---
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+
+      - name: Build React app
+        run: npm run build
+        working-directory: frontend
+        # Output: frontend/dist/
+
+      # --- Quarto docs (docs/) ---
       - name: Install librsvg
-        run: sudo apt-get install librsvg2-bin
+        run: sudo apt-get install -y librsvg2-bin
 
       - name: Set up Quarto
         uses: quarto-dev/quarto-actions/setup@v2
@@ -33,11 +51,22 @@ jobs:
         uses: quarto-dev/quarto-actions/render@v2
         with:
           path: docs
+        # Output: docs/build/
+        # Freeze cache (docs/_freeze/) committed to repo → no Python needed.
+
+      # --- Assemble combined site ---
+      # Structure: app at root, docs at /docs, CNAME for custom domain
+      - name: Assemble site
+        run: |
+          mkdir -p _site/docs
+          cp -r frontend/dist/. _site/
+          cp -r docs/build/. _site/docs/
+          echo "data.kulakci.de" > _site/CNAME
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/build
+          path: _site
 
   deploy:
     needs: build
