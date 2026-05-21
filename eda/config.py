@@ -12,7 +12,7 @@ from pathlib import Path
 # Number of qualifying PDF documents to sample *per dataset_id* (stratum).
 # Assumption: a stratified sample preserves coverage across sub-collections.
 # Set lower (e.g. 100) for quick local tests; use 1000 for the full analysis.
-SAMPLE_SIZE = 1000
+SAMPLE_SIZE = 17
 
 # ---------------------------------------------------------------------------
 # Entity / edge filtering thresholds
