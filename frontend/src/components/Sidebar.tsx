@@ -1,321 +1,832 @@
 import { useMemo, useState } from "react";
 import { useGraphStore, useSelectedNode } from "@/store";
-import { communityColor } from "@/lib/colors";
 import { cosmographRef } from "@/graphRef";
-import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
-import { Separator } from "@/components/ui/separator";
+import { communityColor } from "@/lib/colors";
+import { Switch } from "@/components/ui/switch";
+import type { GraphNode } from "@/types";
 
-const SIDEBAR_WIDTH = 288;
 const MAX_SEARCH_RESULTS = 8;
-const MAX_SOURCE_DOCS = 5;
+
+/* ─── Icons ─────────────────────────────────────────────────────────────── */
+
+function SearchIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="11" cy="11" r="8" />
+      <line x1="21" y1="21" x2="16.65" y2="16.65" />
+    </svg>
+  );
+}
+
+function ChevronLeftIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="15 18 9 12 15 6" />
+    </svg>
+  );
+}
+
+function FileTextIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 2 14 8 20 8" />
+      <line x1="16" y1="13" x2="8" y2="13" />
+      <line x1="16" y1="17" x2="8" y2="17" />
+      <polyline points="10 9 9 9 8 9" />
+    </svg>
+  );
+}
+
+/* ─── Root ───────────────────────────────────────────────────────────────── */
 
 export function Sidebar() {
-  const sidebarOpen = useGraphStore((s) => s.sidebarOpen);
-  const setSidebarOpen = useGraphStore((s) => s.setSidebarOpen);
+  const nodes = useGraphStore((s) => s.nodes);
+  const setSelectedNode = useGraphStore((s) => s.setSelectedNode);
   const selectedNode = useSelectedNode();
 
-  return (
-    <>
-      {/* Sidebar panel */}
-      <aside
-        className="fixed top-12 bottom-0 left-0 z-20 flex flex-col overflow-hidden"
-        style={{
-          width: SIDEBAR_WIDTH,
-          background: "oklch(0.09 0 0)",
-          border: "1px solid oklch(0.2 0 0)",
-          borderLeft: "none",
-          borderRadius: "0 20px 20px 0",
-          transform: sidebarOpen ? "translateX(0)" : `translateX(-${SIDEBAR_WIDTH}px)`,
-          transition: "transform 300ms ease",
-        }}
-      >
-        {selectedNode ? <NodeDetail /> : <DefaultView />}
-      </aside>
+  const [trail, setTrail] = useState<string[]>([]);
 
-      {/* Collapse toggle — follows the right edge of the sidebar */}
-      <button
-        onClick={() => setSidebarOpen(!sidebarOpen)}
-        aria-label={sidebarOpen ? "Collapse sidebar" : "Expand sidebar"}
-        className="fixed z-30 top-1/2 -translate-y-1/2 flex items-center justify-center"
-        style={{
-          left: sidebarOpen ? SIDEBAR_WIDTH - 12 : 0,
-          width: 24,
-          height: 48,
-          background: "oklch(0.12 0 0)",
-          border: "1px solid oklch(0.2 0 0)",
-          borderLeft: sidebarOpen ? "none" : "1px solid oklch(0.2 0 0)",
-          borderRadius: sidebarOpen ? "0 8px 8px 0" : "0 8px 8px 0",
-          transition: "left 300ms ease",
-          cursor: "pointer",
-          color: "oklch(0.5 0 0)",
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.color = "white")}
-        onMouseLeave={(e) => (e.currentTarget.style.color = "oklch(0.5 0 0)")}
-      >
-        <span style={{ fontSize: 10, lineHeight: 1 }}>
-          {sidebarOpen ? "‹" : "›"}
-        </span>
-      </button>
-    </>
+  // When node changes via external means (e.g. graph click), reset trail
+  // but we handle trail push internally in selectNode.
+
+  function handleSelectNode(id: string | null) {
+    if (id === null) {
+      setTrail([]);
+      setSelectedNode(null);
+    } else {
+      setSelectedNode(id);
+    }
+  }
+
+  function handleBreadcrumbJump(id: string, idx: number) {
+    // Jump back to node at idx, trim trail to that point
+    setTrail((prev) => prev.slice(0, idx));
+    setSelectedNode(id);
+    const nodeIdx = nodes.findIndex((n) => n.id === id);
+    if (nodeIdx >= 0) cosmographRef.current?.focusPoint(nodeIdx);
+  }
+
+  function handleNeighborClick(id: string) {
+    const currentId = selectedNode?.id;
+    if (currentId) {
+      setTrail((prev) => [...prev, currentId]);
+    }
+    setSelectedNode(id);
+    const nodeIdx = nodes.findIndex((n) => n.id === id);
+    if (nodeIdx >= 0) cosmographRef.current?.focusPoint(nodeIdx);
+  }
+
+  function handleBack() {
+    const prev = trail[trail.length - 1];
+    if (prev) {
+      setTrail((t) => t.slice(0, -1));
+      setSelectedNode(prev);
+      const nodeIdx = nodes.findIndex((n) => n.id === prev);
+      if (nodeIdx >= 0) cosmographRef.current?.focusPoint(nodeIdx);
+    } else {
+      setTrail([]);
+      setSelectedNode(null);
+    }
+  }
+
+  return (
+    <aside
+      style={{
+        position: "fixed",
+        left: 20,
+        top: "50%",
+        transform: "translateY(-50%)",
+        zIndex: 20,
+        width: 320,
+        maxHeight: "calc(100vh - 80px)",
+        background: "#09090b",
+        border: "1px solid #27272a",
+        borderRadius: 20,
+        padding: 20,
+        boxShadow: "0 8px 32px rgba(0,0,0,0.4)",
+        display: "flex",
+        flexDirection: "column",
+        overflow: "hidden",
+        fontFamily: "Inter, sans-serif",
+      }}
+    >
+      {selectedNode ? (
+        <NodeDetail
+          node={selectedNode}
+          trail={trail}
+          setSelectedNode={handleSelectNode}
+          onBack={handleBack}
+          onBreadcrumbJump={handleBreadcrumbJump}
+          onNeighborClick={handleNeighborClick}
+        />
+      ) : (
+        <DefaultView setTrail={setTrail} />
+      )}
+    </aside>
   );
 }
 
 /* ─── State 1: Default ─────────────────────────────────────────────────── */
 
-function DefaultView() {
+interface DefaultViewProps {
+  setTrail: React.Dispatch<React.SetStateAction<string[]>>;
+}
+
+function DefaultView({ setTrail }: DefaultViewProps) {
   const nodes = useGraphStore((s) => s.nodes);
   const edges = useGraphStore((s) => s.edges);
   const allCommunities = useGraphStore((s) => s.allCommunities);
   const activeCommunities = useGraphStore((s) => s.activeCommunities);
   const toggleCommunity = useGraphStore((s) => s.toggleCommunity);
-  const setAllCommunities = useGraphStore((s) => s.setAllCommunities);
   const setSelectedNode = useGraphStore((s) => s.setSelectedNode);
 
   const [query, setQuery] = useState("");
   const [showDropdown, setShowDropdown] = useState(false);
+  const [minConn, setMinConn] = useState(1);
+
+  const maxDegree = useMemo(
+    () => nodes.reduce((m, n) => Math.max(m, n.degree), 1),
+    [nodes]
+  );
+
+  const density = useMemo(() => {
+    const n = nodes.length;
+    if (n < 2) return 0;
+    return (2 * edges.length) / (n * (n - 1));
+  }, [nodes, edges]);
 
   const top5 = useMemo(
     () =>
       [...nodes]
+        .filter((n) => n.degree >= minConn)
         .sort((a, b) => b.betweenness_centrality - a.betweenness_centrality)
         .slice(0, 5),
-    [nodes]
+    [nodes, minConn]
   );
 
   const searchResults = useMemo(() => {
     if (!query.trim()) return [];
     const q = query.toLowerCase();
-    return nodes.filter((n) => n.label.includes(q)).slice(0, MAX_SEARCH_RESULTS);
+    return nodes.filter((n) => n.label.toLowerCase().includes(q)).slice(0, MAX_SEARCH_RESULTS);
   }, [query, nodes]);
-
-  function selectNode(id: string) {
-    const idx = nodes.findIndex((n) => n.id === id);
-    if (idx >= 0) cosmographRef.current?.focusPoint(idx);
-    setSelectedNode(id);
-    setQuery("");
-    setShowDropdown(false);
-  }
 
   const sortedCommunities = useMemo(
     () => [...allCommunities].sort((a, b) => a - b),
     [allCommunities]
   );
 
+  // Communities filtered by minConn: only show communities that have at least one node >= minConn
+  const filteredCommunities = useMemo(() => {
+    if (minConn <= 1) return sortedCommunities;
+    const communitiesWithNodes = new Set(
+      nodes.filter((n) => n.degree >= minConn).map((n) => n.community)
+    );
+    return sortedCommunities.filter((c) => communitiesWithNodes.has(c));
+  }, [sortedCommunities, nodes, minConn]);
+
+  function selectNode(id: string) {
+    const idx = nodes.findIndex((n) => n.id === id);
+    if (idx >= 0) cosmographRef.current?.focusPoint(idx);
+    setSelectedNode(id);
+    setTrail([]);
+    setQuery("");
+    setShowDropdown(false);
+  }
+
   return (
-    <div className="flex flex-col gap-0 overflow-y-auto h-full py-4 text-sm">
-      {/* Stats */}
-      <Section label="Network">
-        <div className="grid grid-cols-2 gap-2">
-          <StatCard label="Nodes" value={nodes.length.toLocaleString()} />
-          <StatCard label="Edges" value={edges.length.toLocaleString()} />
-        </div>
-      </Section>
+    <div style={{ display: "flex", flexDirection: "column", gap: 0, overflowY: "auto", height: "100%" }}>
+
+      {/* Stats — 3 columns */}
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8 }}>
+        <StatCard label="Nodes" value={nodes.length.toLocaleString()} />
+        <StatCard label="Edges" value={edges.length.toLocaleString()} />
+        <StatCard label="Density" value={density.toFixed(3)} />
+      </div>
 
       <SidebarSeparator />
 
       {/* Search */}
-      <Section label="Search">
-        <div className="relative">
-          <Input
+      <div style={{ position: "relative" }}>
+        <div style={{ position: "relative" }}>
+          <span
+            style={{
+              position: "absolute",
+              left: 10,
+              top: "50%",
+              transform: "translateY(-50%)",
+              color: "#71717a",
+              display: "flex",
+              pointerEvents: "none",
+            }}
+          >
+            <SearchIcon />
+          </span>
+          <input
             placeholder="Search entity…"
             value={query}
             onChange={(e) => { setQuery(e.target.value); setShowDropdown(true); }}
             onFocus={() => setShowDropdown(true)}
             onBlur={() => setTimeout(() => setShowDropdown(false), 150)}
-            className="bg-white/5 border-zinc-700 text-white placeholder:text-zinc-500 h-8 text-xs rounded-lg focus-visible:border-zinc-500 focus-visible:ring-0"
+            style={{
+              width: "100%",
+              boxSizing: "border-box",
+              background: "#18181b",
+              border: "1px solid #27272a",
+              borderRadius: 10,
+              paddingLeft: 30,
+              paddingRight: 10,
+              paddingTop: 7,
+              paddingBottom: 7,
+              color: "white",
+              fontSize: 12,
+              outline: "none",
+              fontFamily: "inherit",
+            }}
+            onFocusCapture={(e) => (e.currentTarget.style.borderColor = "#52525b")}
+            onBlurCapture={(e) => (e.currentTarget.style.borderColor = "#27272a")}
           />
-          {showDropdown && searchResults.length > 0 && (
-            <ul className="absolute top-full left-0 right-0 mt-1 z-30 overflow-hidden rounded-xl border border-zinc-800"
-              style={{ background: "oklch(0.12 0 0)" }}>
-              {searchResults.map((n) => (
-                <li key={n.id}>
-                  <button
-                    className="w-full text-left px-3 py-2 text-xs text-zinc-300 hover:bg-white/10 capitalize"
-                    onMouseDown={() => selectNode(n.id)}
-                  >
-                    {n.label}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
-      </Section>
-
-      <SidebarSeparator />
-
-      {/* Top 5 bridges */}
-      <Section label="Top structural bridges">
-        <ul className="space-y-0.5">
-          {top5.map((n, i) => (
-            <li key={n.id}>
-              <button
-                className="w-full flex items-center gap-2 px-2 py-2 rounded-lg hover:bg-white/5 text-left group transition-colors"
-                onClick={() => selectNode(n.id)}
-              >
-                <span className="text-zinc-600 text-xs w-3 shrink-0 tabular-nums">{i + 1}</span>
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: communityColor(n.community) }}
-                />
-                <span className="text-xs text-zinc-300 group-hover:text-white capitalize truncate flex-1 transition-colors">
-                  {n.label}
-                </span>
-                <span className="text-[10px] text-zinc-500 tabular-nums shrink-0">
-                  {(n.betweenness_centrality * 100).toFixed(2)}%
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
-      </Section>
-
-      <SidebarSeparator />
-
-      {/* Community filter */}
-      <Section label="Communities">
-        <div className="flex items-center justify-between mb-2">
-          <span />
-          <button
-            className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors"
-            onClick={() => setAllCommunities(activeCommunities.size < allCommunities.size)}
+        {showDropdown && searchResults.length > 0 && (
+          <ul
+            style={{
+              position: "absolute",
+              top: "100%",
+              left: 0,
+              right: 0,
+              marginTop: 4,
+              zIndex: 30,
+              overflow: "hidden",
+              borderRadius: 10,
+              border: "1px solid #27272a",
+              background: "#09090b",
+              padding: 0,
+              listStyle: "none",
+            }}
           >
-            {activeCommunities.size < allCommunities.size ? "Show all" : "Hide all"}
-          </button>
+            {searchResults.map((n) => (
+              <li key={n.id}>
+                <button
+                  style={{
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 12px",
+                    fontSize: 12,
+                    color: "#d4d4d8",
+                    background: "transparent",
+                    border: "none",
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    textTransform: "capitalize",
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = "#18181b")}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  onMouseDown={() => selectNode(n.id)}
+                >
+                  {n.label}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <SidebarSeparator />
+
+      {/* Top Bridges */}
+      <SectionLabel>Top structural bridges</SectionLabel>
+      <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+        {top5.map((n) => (
+          <li key={n.id}>
+            <button
+              onClick={() => selectNode(n.id)}
+              style={{
+                width: "100%",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                padding: "10px 12px",
+                borderRadius: 10,
+                border: "none",
+                background: "transparent",
+                cursor: "pointer",
+                fontFamily: "inherit",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.background = "#18181b")}
+              onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            >
+              <span style={{ fontSize: 13, color: "white", textTransform: "capitalize", textAlign: "left", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {n.label}
+              </span>
+              <span style={{ fontSize: 12, color: "#a1a1aa", fontVariantNumeric: "tabular-nums", fontFamily: "monospace", flexShrink: 0, marginLeft: 8 }}>
+                {(n.betweenness_centrality * 100).toFixed(2)}%
+              </span>
+            </button>
+          </li>
+        ))}
+        {top5.length === 0 && (
+          <li style={{ fontSize: 12, color: "#52525b", fontStyle: "italic", padding: "8px 12px" }}>
+            No nodes meet the filter.
+          </li>
+        )}
+      </ul>
+
+      <SidebarSeparator />
+
+      {/* Domain filter */}
+      <SectionLabel>Communities</SectionLabel>
+      <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+        {filteredCommunities.map((c) => {
+          const active = activeCommunities.has(c);
+          return (
+            <button
+              key={c}
+              onClick={() => toggleCommunity(c)}
+              style={{
+                borderRadius: 9999,
+                padding: "4px 12px",
+                fontSize: 12,
+                border: active ? "1px solid transparent" : "1px solid #27272a",
+                background: active ? "white" : "#18181b",
+                color: active ? "#09090b" : "#a1a1aa",
+                cursor: "pointer",
+                fontFamily: "inherit",
+                transition: "all 150ms",
+              }}
+            >
+              {c}
+            </button>
+          );
+        })}
+      </div>
+
+      <SidebarSeparator />
+
+      {/* Min Connections Slider */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <span style={{ fontSize: 12, color: "#a1a1aa" }}>Min. Connections</span>
+          <span style={{ fontSize: 12, color: "white", fontVariantNumeric: "tabular-nums", fontFamily: "monospace" }}>
+            {minConn}
+          </span>
         </div>
-        <div className="flex flex-wrap gap-1.5">
-          {sortedCommunities.map((c) => {
-            const active = activeCommunities.has(c);
-            return (
-              <button
-                key={c}
-                onClick={() => toggleCommunity(c)}
-                className={`flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] border transition-all ${
-                  active
-                    ? "border-zinc-600 text-zinc-300"
-                    : "border-zinc-800 text-zinc-600 opacity-50"
-                }`}
-              >
-                <span
-                  className="w-2 h-2 rounded-full shrink-0"
-                  style={{ backgroundColor: communityColor(c) }}
-                />
-                {c}
-              </button>
-            );
-          })}
-        </div>
-      </Section>
+        <input
+          type="range"
+          min={1}
+          max={maxDegree}
+          value={minConn}
+          onChange={(e) => setMinConn(Number(e.target.value))}
+          style={{
+            width: "100%",
+            accentColor: "white",
+            cursor: "pointer",
+          }}
+        />
+      </div>
     </div>
   );
 }
 
 /* ─── State 2: Node selected ───────────────────────────────────────────── */
 
-function NodeDetail() {
-  const node = useSelectedNode()!;
-  const setSelectedNode = useGraphStore((s) => s.setSelectedNode);
+interface NodeDetailProps {
+  node: GraphNode;
+  trail: string[];
+  setSelectedNode: (id: string | null) => void;
+  onBack: () => void;
+  onBreadcrumbJump: (id: string, idx: number) => void;
+  onNeighborClick: (id: string) => void;
+}
+
+function NodeDetail({ node, trail, onBack, onBreadcrumbJump, onNeighborClick }: NodeDetailProps) {
+  const nodes = useGraphStore((s) => s.nodes);
+  const edges = useGraphStore((s) => s.edges);
   const egoMode = useGraphStore((s) => s.egoMode);
   const setEgoMode = useGraphStore((s) => s.setEgoMode);
 
-  const color = communityColor(node.community);
+  const [docsExpanded, setDocsExpanded] = useState(false);
+  const [aiText, setAiText] = useState<string | null>(null);
+  const DOCS_VISIBLE = 5;
+
+  // Compute direct connections (neighbors)
+  const neighbors = useMemo<GraphNode[]>(() => {
+    const neighborIds = edges
+      .filter((e) => e.source === node.id || e.target === node.id)
+      .map((e) => (e.source === node.id ? e.target : e.source));
+    const idSet = new Set(neighborIds);
+    return nodes.filter((n) => idSet.has(n.id));
+  }, [edges, nodes, node.id]);
+
+  // Unique communities of neighbors
+  const neighborCommunities = useMemo(
+    () => [...new Set(neighbors.map((n) => n.community))],
+    [neighbors]
+  );
+
+  // Top 2 neighbor communities by count
+  const topNeighborCommunities = useMemo(() => {
+    const counts = new Map<number, number>();
+    neighbors.forEach((n) => counts.set(n.community, (counts.get(n.community) ?? 0) + 1));
+    return [...counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 2)
+      .map(([c]) => c);
+  }, [neighbors]);
+
+  // "Why a bridge?" text
+  const bridgeText = useMemo(() => {
+    const bPct = (node.betweenness_centrality * 100).toFixed(2);
+    if (neighborCommunities.length <= 1) {
+      const commLabel = neighborCommunities.length === 1 ? `Community ${neighborCommunities[0]}` : "its community";
+      return `Acts as internal connector within ${commLabel}.`;
+    }
+    const [cA, cB] = topNeighborCommunities;
+    return `Connects Community ${cA} and Community ${cB} with ${node.degree} direct links. ${bPct}% of all shortest paths route through this node.`;
+  }, [node, neighborCommunities, topNeighborCommunities]);
+
+  // AI summary text (deterministic, no API call)
+  function generateAiSummary() {
+    const bPct = (node.betweenness_centrality * 100).toFixed(2);
+    const numCommunities = neighborCommunities.length;
+    const commA = topNeighborCommunities[0] !== undefined ? `Community ${topNeighborCommunities[0]}` : "its community";
+    const commB = topNeighborCommunities[1] !== undefined ? `Community ${topNeighborCommunities[1]}` : commA;
+    const typeLabel = node.type === "PERSON" ? "individual" : node.type === "ORG" ? "organization" : "entity";
+
+    setAiText(
+      `${node.label.charAt(0).toUpperCase() + node.label.slice(1)} is a ${typeLabel} with a betweenness centrality of ${bPct}%, placing them among the most structurally critical nodes. They connect ${node.degree} entities across ${numCommunities} communit${numCommunities === 1 ? "y" : "ies"}, making them a key broker in the network. Removing this node would likely fragment connections between ${commA} and ${commB}.`
+    );
+  }
+
+  // Visible docs
+  const visibleDocs = docsExpanded ? node.source_docs : node.source_docs.slice(0, DOCS_VISIBLE);
+  const hiddenCount = node.source_docs.length - DOCS_VISIBLE;
+
+  // Breadcrumb trail node labels
+  const trailNodes = useMemo(
+    () => trail.map((id) => nodes.find((n) => n.id === id)),
+    [trail, nodes]
+  );
 
   return (
-    <div className="flex flex-col h-full overflow-hidden text-sm">
-      {/* Back */}
-      <button
-        className="flex items-center gap-1.5 px-4 py-3 text-xs text-zinc-500 hover:text-zinc-200 transition-colors border-b border-zinc-800/60 shrink-0"
-        onClick={() => setSelectedNode(null)}
-      >
-        <span className="text-[10px]">←</span> Back
-      </button>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", overflow: "hidden" }}>
+      {/* Breadcrumb / Back */}
+      <div style={{ display: "flex", alignItems: "center", gap: 0, flexWrap: "wrap", marginBottom: 12, flexShrink: 0 }}>
+        <button
+          onClick={onBack}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 4,
+            background: "transparent",
+            border: "none",
+            color: "#71717a",
+            fontSize: 12,
+            cursor: "pointer",
+            fontFamily: "inherit",
+            padding: 0,
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.color = "#a1a1aa")}
+          onMouseLeave={(e) => (e.currentTarget.style.color = "#71717a")}
+        >
+          <ChevronLeftIcon />
+          <span>Overview</span>
+        </button>
 
-      <div className="flex flex-col gap-0 overflow-y-auto flex-1 py-4">
-        {/* Entity header */}
-        <Section label={undefined}>
-          <div className="flex items-center gap-2 mb-2">
-            <Badge
-              variant="outline"
-              className="text-[10px] px-1.5 py-0 rounded-full border-zinc-700 text-zinc-400"
-            >
-              {node.type}
-            </Badge>
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded-full border"
-              style={{ borderColor: `${color}50`, color }}
-            >
-              Community {node.community}
+        {trailNodes.map((trailNode, idx) =>
+          trailNode ? (
+            <span key={trailNode.id} style={{ display: "flex", alignItems: "center" }}>
+              <span style={{ fontSize: 12, color: "#3f3f46", margin: "0 4px" }}>›</span>
+              <button
+                onClick={() => onBreadcrumbJump(trailNode.id, idx)}
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  color: "#71717a",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  padding: 0,
+                  textTransform: "capitalize",
+                  maxWidth: 80,
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = "#a1a1aa")}
+                onMouseLeave={(e) => (e.currentTarget.style.color = "#71717a")}
+              >
+                {trailNode.label}
+              </button>
             </span>
-          </div>
-          <h2 className="text-white font-semibold text-sm capitalize leading-snug">
+          ) : null
+        )}
+
+        {trail.length > 0 && (
+          <span style={{ display: "flex", alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: "#3f3f46", margin: "0 4px" }}>›</span>
+            <span
+              style={{
+                fontSize: 12,
+                color: "#a1a1aa",
+                textTransform: "capitalize",
+                maxWidth: 80,
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {node.label}
+            </span>
+          </span>
+        )}
+      </div>
+
+      <div style={{ overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 0 }}>
+        {/* Entity header */}
+        <div style={{ marginBottom: 4 }}>
+          <span
+            style={{
+              display: "inline-block",
+              background: "#27272a",
+              color: "#d4d4d8",
+              fontSize: 11,
+              borderRadius: 9999,
+              padding: "2px 10px",
+              marginBottom: 8,
+            }}
+          >
+            Community {node.community}
+          </span>
+          <h2
+            style={{
+              color: "white",
+              fontSize: 18,
+              fontWeight: 600,
+              margin: 0,
+              textTransform: "capitalize",
+              lineHeight: 1.3,
+            }}
+          >
             {node.label}
           </h2>
-        </Section>
+        </div>
 
         <SidebarSeparator />
 
-        {/* Metrics */}
-        <Section label="Metrics">
-          <div className="grid grid-cols-3 gap-2">
-            <StatCard label="Betweenness" value={`${(node.betweenness_centrality * 100).toFixed(2)}%`} />
-            <StatCard label="Degree" value={String(node.degree)} />
-            <StatCard
-              label="Clustering"
-              value={node.clustering_coefficient != null ? node.clustering_coefficient.toFixed(3) : "—"}
-            />
-          </div>
-        </Section>
+        {/* Metric cards */}
+        <SectionLabel>Metrics</SectionLabel>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 8, marginBottom: 4 }}>
+          <MetricCard label="Betweenness" value={`${(node.betweenness_centrality * 100).toFixed(2)}%`} />
+          <MetricCard label="Degree" value={String(node.degree)} />
+          <MetricCard
+            label="Clustering"
+            value={node.clustering_coefficient != null ? node.clustering_coefficient.toFixed(3) : "—"}
+          />
+        </div>
 
         <SidebarSeparator />
 
-        {/* Ego toggle */}
-        <Section label="View">
-          <button
-            onClick={() => setEgoMode(!egoMode)}
-            className={`w-full flex items-center justify-between px-3 py-2 rounded-xl border text-xs transition-all ${
-              egoMode
-                ? "bg-white/10 border-zinc-600 text-white"
-                : "bg-transparent border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200"
-            }`}
-          >
-            Show only neighbors
-            <span
-              className={`w-3.5 h-3.5 rounded-full border-2 transition-colors ${
-                egoMode ? "bg-white border-white" : "bg-transparent border-zinc-600"
-              }`}
-            />
-          </button>
-        </Section>
+        {/* Direct Connections */}
+        {neighbors.length > 0 && (
+          <>
+            <SectionLabel>Direct connections ({neighbors.length})</SectionLabel>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "row",
+                flexWrap: "nowrap",
+                overflowX: "auto",
+                gap: 6,
+                paddingBottom: 4,
+              }}
+            >
+              {neighbors.map((neighbor) => (
+                <button
+                  key={neighbor.id}
+                  onClick={() => onNeighborClick(neighbor.id)}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    padding: "5px 10px",
+                    borderRadius: 9999,
+                    border: "1px solid #27272a",
+                    background: "#18181b",
+                    color: "#d4d4d8",
+                    fontSize: 12,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                    flexShrink: 0,
+                    textTransform: "capitalize",
+                    transition: "all 150ms",
+                    whiteSpace: "nowrap",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "#27272a";
+                    e.currentTarget.style.color = "white";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "#18181b";
+                    e.currentTarget.style.color = "#d4d4d8";
+                  }}
+                >
+                  <span
+                    style={{
+                      width: 7,
+                      height: 7,
+                      borderRadius: "50%",
+                      background: communityColor(neighbor.community),
+                      flexShrink: 0,
+                    }}
+                  />
+                  {neighbor.label}
+                </button>
+              ))}
+            </div>
+            <SidebarSeparator />
+          </>
+        )}
+
+        {/* Why a bridge? */}
+        <SectionLabel>Why a bridge?</SectionLabel>
+        <p
+          style={{
+            fontSize: 12,
+            color: "#a1a1aa",
+            lineHeight: 1.6,
+            margin: "0 0 4px 0",
+          }}
+        >
+          {bridgeText}
+        </p>
 
         <SidebarSeparator />
 
-        {/* Source docs */}
-        <Section label="Source documents">
-          {node.source_docs.length === 0 ? (
-            <p className="text-xs text-zinc-600 italic">No documents linked.</p>
-          ) : (
-            <ul className="space-y-2">
-              {node.source_docs.slice(0, MAX_SOURCE_DOCS).map((doc) => (
-                <li key={doc.doc_id}>
+        {/* Source documents */}
+        <SectionLabel>Source documents</SectionLabel>
+        {node.source_docs.length === 0 ? (
+          <p style={{ fontSize: 12, color: "#52525b", fontStyle: "italic", margin: 0 }}>
+            No documents linked.
+          </p>
+        ) : (
+          <>
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {visibleDocs.map((doc) => (
+                <li
+                  key={doc.doc_id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    padding: "8px 0",
+                    borderBottom: "1px solid #27272a",
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, overflow: "hidden" }}>
+                    <span style={{ color: "#52525b", flexShrink: 0 }}>
+                      <FileTextIcon />
+                    </span>
+                    <span
+                      style={{
+                        fontSize: 12,
+                        color: "#d4d4d8",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {doc.file_name || doc.doc_id}
+                    </span>
+                  </div>
                   <a
                     href={doc.online_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-xs text-blue-400/80 hover:text-blue-400 hover:underline break-all leading-relaxed block transition-colors"
+                    style={{
+                      fontSize: 11,
+                      color: "#71717a",
+                      textDecoration: "none",
+                      flexShrink: 0,
+                      fontFamily: "inherit",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.color = "#e4e4e7")}
+                    onMouseLeave={(e) => (e.currentTarget.style.color = "#71717a")}
                   >
-                    {doc.file_name || doc.doc_id}
+                    DOJ ↗
                   </a>
                 </li>
               ))}
-              {node.source_docs.length > MAX_SOURCE_DOCS && (
-                <li className="text-[10px] text-zinc-600">
-                  +{node.source_docs.length - MAX_SOURCE_DOCS} more
-                </li>
-              )}
             </ul>
+            {node.source_docs.length > DOCS_VISIBLE && (
+              <button
+                onClick={() => setDocsExpanded((x) => !x)}
+                style={{
+                  marginTop: 8,
+                  background: "transparent",
+                  border: "none",
+                  color: "#71717a",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontFamily: "inherit",
+                  padding: 0,
+                  textAlign: "left",
+                }}
+                onMouseEnter={(e) => (e.currentTarget.style.color = "#a1a1aa")}
+                onMouseLeave={(e) => (e.currentTarget.style.color = "#71717a")}
+              >
+                {docsExpanded ? "Show less" : `Show ${hiddenCount} more`}
+              </button>
+            )}
+          </>
+        )}
+
+        <SidebarSeparator />
+
+        {/* Show only neighbors toggle */}
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+          }}
+        >
+          <span style={{ fontSize: 13, color: "white" }}>Show only neighbors</span>
+          <Switch checked={egoMode} onCheckedChange={setEgoMode} />
+        </div>
+
+        <SidebarSeparator />
+
+        {/* AI Summary */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <button
+            onClick={generateAiSummary}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 6,
+              padding: "9px 16px",
+              borderRadius: 10,
+              border: "1px solid #27272a",
+              background: "#18181b",
+              color: "#d4d4d8",
+              fontSize: 13,
+              cursor: "pointer",
+              fontFamily: "inherit",
+              transition: "all 150ms",
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.background = "#27272a";
+              e.currentTarget.style.color = "white";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.background = "#18181b";
+              e.currentTarget.style.color = "#d4d4d8";
+            }}
+          >
+            <span style={{ fontSize: 14 }}>✦</span>
+            Explain this node
+          </button>
+
+          {aiText && (
+            <div
+              style={{
+                background: "#0f0f12",
+                border: "1px solid #27272a",
+                borderRadius: 12,
+                padding: 14,
+              }}
+            >
+              <p
+                style={{
+                  fontSize: 10,
+                  color: "#71717a",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.08em",
+                  margin: "0 0 8px 0",
+                  fontWeight: 500,
+                }}
+              >
+                ✦ AI Analysis
+              </p>
+              <p
+                style={{
+                  fontSize: 12,
+                  color: "#a1a1aa",
+                  lineHeight: 1.6,
+                  margin: 0,
+                  textTransform: "capitalize",
+                }}
+              >
+                {aiText}
+              </p>
+            </div>
           )}
-        </Section>
+        </div>
+
+        {/* Bottom spacer */}
+        <div style={{ height: 8 }} />
       </div>
     </div>
   );
@@ -323,28 +834,106 @@ function NodeDetail() {
 
 /* ─── Shared primitives ────────────────────────────────────────────────── */
 
-function Section({ label, children }: { label?: string; children: React.ReactNode }) {
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div className="px-4 py-3">
-      {label && (
-        <p className="text-[10px] text-zinc-500 uppercase tracking-widest mb-2.5 font-medium">
-          {label}
-        </p>
-      )}
+    <p
+      style={{
+        fontSize: 10,
+        color: "#71717a",
+        textTransform: "uppercase",
+        letterSpacing: "0.08em",
+        marginBottom: 8,
+        fontWeight: 500,
+        marginTop: 0,
+      }}
+    >
       {children}
-    </div>
+    </p>
   );
 }
 
 function SidebarSeparator() {
-  return <Separator className="bg-zinc-800/60 mx-4" style={{ width: "calc(100% - 32px)" }} />;
+  return (
+    <div
+      style={{
+        height: 1,
+        background: "#27272a",
+        margin: "16px 0",
+      }}
+    />
+  );
 }
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl px-2.5 py-2" style={{ background: "oklch(0.13 0 0)" }}>
-      <p className="text-[10px] text-zinc-500 mb-0.5 truncate">{label}</p>
-      <p className="text-xs text-white font-medium tabular-nums">{value}</p>
+    <div
+      style={{
+        background: "#18181b",
+        border: "1px solid #27272a",
+        borderRadius: 12,
+        padding: 12,
+      }}
+    >
+      <p
+        style={{
+          fontSize: 10,
+          color: "#71717a",
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+          margin: "0 0 4px 0",
+        }}
+      >
+        {label}
+      </p>
+      <p
+        style={{
+          fontSize: 20,
+          color: "white",
+          fontWeight: 600,
+          margin: 0,
+          lineHeight: 1,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function MetricCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        background: "#18181b",
+        border: "1px solid #27272a",
+        borderRadius: 12,
+        padding: 10,
+      }}
+    >
+      <p
+        style={{
+          fontSize: 10,
+          color: "#71717a",
+          textTransform: "uppercase",
+          letterSpacing: "0.08em",
+          margin: "0 0 4px 0",
+        }}
+      >
+        {label}
+      </p>
+      <p
+        style={{
+          fontSize: 16,
+          color: "white",
+          fontWeight: 600,
+          margin: 0,
+          lineHeight: 1,
+          fontVariantNumeric: "tabular-nums",
+        }}
+      >
+        {value}
+      </p>
     </div>
   );
 }

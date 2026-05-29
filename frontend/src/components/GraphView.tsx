@@ -76,8 +76,20 @@ export function GraphView() {
       <Cosmograph
         ref={cosmographRef}
         {...baseConfig}
-        backgroundColor="#0D1117"
-        showLabelsFor={labelNodeIds}
+        {...{
+          background_color: "#0D1117",
+          show_labels: true,
+          show_top_labels: true,
+          show_labels_for: labelNodeIds,
+          point_label_color: "#ffffff",
+          link_color: "#ffffff",
+          link_greyout_opacity: 0.1,
+          simulation_gravity: 0.1,
+          simulation_repulsion: 1.5,
+          simulation_link_spring: 0.5,
+          simulation_friction: 0.85,
+          fit_view_on_init: true,
+        } as CosmographConfig}
         onPointClick={(index: number) => {
           const node = orderedNodes[index];
           if (!node) return;
@@ -87,12 +99,6 @@ export function GraphView() {
           if (!selectedNodeId) return;
           setSelectedNode(null);
         }}
-        linkColor="#30363D"
-        linkOpacity={0.6}
-        simulationGravity={0.1}
-        simulationRepulsion={1.5}
-        simulationLinkSpring={0.5}
-        simulationFriction={0.85}
       />
     </CosmographProvider>
   );
